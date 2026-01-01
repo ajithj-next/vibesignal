@@ -1,0 +1,112 @@
+[project]
+name = "vibesignal"
+version = "0.1.0"
+description = "vibesignal - First Principles reasoning, Good Vibes, Sublime Visual thinking"
+authors = [
+    {name = "Ajith", email = "ajithj@users.noreply.github.com"}
+]
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.12"
+keywords = ["jupyter", "twitter", "ai", "claude", "notebooks", "threads", "first-principles"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+]
+
+dependencies = [
+    # Notebook processing
+    "nbformat>=5.10.0",
+    "nbconvert>=7.16.0",
+
+    # Image processing
+    "pillow>=11.0.0",
+    "matplotlib>=3.9.0",
+
+    # Claude AI
+    "anthropic>=0.40.0",
+
+    # CLI framework
+    "click>=8.1.7",
+    "rich>=13.9.0",
+
+    # Configuration
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.6.0",
+    "python-dotenv>=1.0.0",
+
+    # Utilities
+    "pathvalidate>=3.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-cov>=6.0.0",
+    "pytest-mock>=3.14.0",
+    "black>=24.10.0",
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+    "ipython>=8.31.0",
+]
+
+[project.scripts]
+vibesignal = "vibesignal.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/ajithj-next/vibesignal"
+Repository = "https://github.com/ajithj-next/vibesignal"
+Issues = "https://github.com/ajithj-next/vibesignal/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vibesignal"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = [
+    "--verbose",
+    "--cov=vibesignal",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+]
+
+[tool.black]
+line-length = 100
+target-version = ['py312']
+include = '\.pyi?$'
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+]
+ignore = [
+    "E501", # line too long (handled by black)
+    "B008", # function calls in argument defaults
+]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
