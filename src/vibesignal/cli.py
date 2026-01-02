@@ -20,6 +20,7 @@ from vibesignal.workspace import WorkspaceManager
 from vibesignal.publishing.twitter import TwitterPublisher
 from vibesignal.preview.terminal import TerminalPreview
 from vibesignal.preview.html import HTMLPreview
+from vibesignal.inspiration import QuoteDatabase, QuoteVisualizer
 
 console = Console()
 
@@ -477,10 +478,34 @@ def preview(
     default=2.0,
     help="Delay in seconds between tweets (default: 2.0)",
 )
-def post_thread(project_name: str, workspace_dir: Path, dry_run: bool, delay: float):
+@click.option(
+    "--skip-preview",
+    is_flag=True,
+    help="Skip the terminal preview before posting",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    help="Skip confirmation prompt (use with caution)",
+)
+def post_thread(
+    project_name: str,
+    workspace_dir: Path,
+    dry_run: bool,
+    delay: float,
+    skip_preview: bool,
+    yes: bool,
+):
     """Post a thread to Twitter/X.
 
     PROJECT_NAME: Name of the project to post
+
+    This command will:
+    1. Show a preview of the thread
+    2. Ask for confirmation before posting
+    3. Post all tweets as a threaded conversation
+    4. Save a publish record for later deletion if needed
     """
     try:
         # Load config
@@ -491,7 +516,7 @@ def post_thread(project_name: str, workspace_dir: Path, dry_run: bool, delay: fl
             sys.exit(1)
 
         # Check Twitter credentials
-        if not all([
+        if not dry_run and not all([
             config.twitter_api_key,
             config.twitter_api_secret,
             config.twitter_access_token,
@@ -517,6 +542,25 @@ def post_thread(project_name: str, workspace_dir: Path, dry_run: bool, delay: fl
             console.print(f"[dim]Workspace directory: {workspace_dir}[/dim]")
             sys.exit(1)
 
+        # Check if already published
+        publish_record_path = workspace / "publish_record.json"
+        if publish_record_path.exists() and not dry_run:
+            import json
+            with open(publish_record_path) as f:
+                record = json.load(f)
+            console.print(
+                Panel.fit(
+                    f"[yellow]Warning:[/yellow] This thread was already published!\n\n"
+                    f"Published at: {record.get('published_at', 'Unknown')}\n"
+                    f"First tweet: {record.get('first_tweet_url', 'Unknown')}\n\n"
+                    f"Use 'vibesignal delete-thread {project_name}' to delete it first,\n"
+                    f"or use --dry-run to simulate.",
+                    border_style="yellow",
+                    title="[bold yellow]Already Published[/bold yellow]",
+                )
+            )
+            sys.exit(1)
+
         # Load thread
         thread_file = workspace / "thread.json"
         if not thread_file.exists():
@@ -539,16 +583,25 @@ def post_thread(project_name: str, workspace_dir: Path, dry_run: bool, delay: fl
             call_to_action=thread_data.get("call_to_action"),
         )
 
+        # Show preview unless skipped
+        if not skip_preview:
+            console.print()
+            console.print("[bold cyan]Thread Preview:[/bold cyan]")
+            console.print()
+            previewer = TerminalPreview(console=console)
+            previewer.show_compact(thread)
+
         # Initialize Twitter publisher
         publisher = TwitterPublisher(
-            api_key=config.twitter_api_key,
-            api_secret=config.twitter_api_secret,
-            access_token=config.twitter_access_token,
-            access_token_secret=config.twitter_access_token_secret,
+            api_key=config.twitter_api_key or "",
+            api_secret=config.twitter_api_secret or "",
+            access_token=config.twitter_access_token or "",
+            access_token_secret=config.twitter_access_token_secret or "",
             bearer_token=config.twitter_bearer_token if config.twitter_bearer_token else None,
         )
 
         # Verify credentials
+        user_info = None
         if not dry_run:
             try:
                 user_info = publisher.verify_credentials()
@@ -567,13 +620,17 @@ def post_thread(project_name: str, workspace_dir: Path, dry_run: bool, delay: fl
                 f"Project: [yellow]{project_name}[/yellow]\n"
                 f"Tweets: [bold]{len(thread.tweets)}[/bold]\n"
                 f"Images: [bold]{metadata.total_images}[/bold]\n"
-                f"Mode: [{'yellow]DRY RUN' if dry_run else 'green]LIVE'}[/]\n\n"
-                f"Hook: [dim]{thread.hook}[/dim]",
+                f"Mode: [{'yellow]DRY RUN' if dry_run else 'green]LIVE'}[/]\n"
+                f"Account: [bold]@{user_info['username'] if user_info else 'N/A'}[/bold]\n\n"
+                f"Hook: [dim]{thread.hook[:100]}{'...' if len(thread.hook) > 100 else ''}[/dim]",
                 border_style="cyan",
             )
         )
 
-        if not dry_run:
+        if not dry_run and not yes:
+            console.print()
+            console.print("[bold red]This will post to your LIVE Twitter account![/bold red]")
+            console.print("[dim]You can delete the thread later with 'vibesignal delete-thread'[/dim]")
             console.print()
             if not click.confirm("Post this thread to Twitter?", default=False):
                 console.print("[yellow]Cancelled.[/yellow]")
@@ -617,7 +674,9 @@ def post_thread(project_name: str, workspace_dir: Path, dry_run: bool, delay: fl
                 Panel.fit(
                     "[green]THREAD POSTED![/green]\n\n"
                     f"Posted {len(published)} tweets\n\n"
-                    f"First tweet: [link={published[0]['url']}]{published[0]['url']}[/link]",
+                    f"First tweet: [link={published[0]['url']}]{published[0]['url']}[/link]\n\n"
+                    f"[dim]A publish record has been saved. You can delete this thread later with:[/dim]\n"
+                    f"  vibesignal delete-thread {project_name}",
                     border_style="green",
                     title="[bold green]Success[/bold green]",
                 )
@@ -638,6 +697,546 @@ def post_thread(project_name: str, workspace_dir: Path, dry_run: bool, delay: fl
                 title="[bold red]Posting Failed[/bold red]",
             )
         )
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+
+@main.command()
+@click.argument("project_name")
+@click.option(
+    "--workspace-dir",
+    type=click.Path(path_type=Path),
+    default="projects",
+    help="Base directory for project workspaces",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    help="Skip confirmation prompt",
+)
+@click.option(
+    "--delay",
+    type=float,
+    default=1.0,
+    help="Delay in seconds between deletions (default: 1.0)",
+)
+def delete_thread(project_name: str, workspace_dir: Path, yes: bool, delay: float):
+    """Delete a published thread from Twitter/X.
+
+    PROJECT_NAME: Name of the project whose thread to delete
+
+    This command will delete all tweets in the thread that were posted
+    using 'vibesignal post-thread'. It uses the saved publish record
+    to identify which tweets to delete.
+    """
+    try:
+        # Load config
+        try:
+            config = get_config()
+        except Exception as e:
+            console.print(f"[red]Error loading config:[/red] {e}")
+            sys.exit(1)
+
+        # Check Twitter credentials
+        if not all([
+            config.twitter_api_key,
+            config.twitter_api_secret,
+            config.twitter_access_token,
+            config.twitter_access_token_secret,
+        ]):
+            console.print(
+                "[red]Error:[/red] Twitter credentials not configured\n\n"
+                "Set the following environment variables:\n"
+                "  VIBESIGNAL_TWITTER_API_KEY\n"
+                "  VIBESIGNAL_TWITTER_API_SECRET\n"
+                "  VIBESIGNAL_TWITTER_ACCESS_TOKEN\n"
+                "  VIBESIGNAL_TWITTER_ACCESS_TOKEN_SECRET"
+            )
+            sys.exit(1)
+
+        # Get workspace
+        workspace_manager = WorkspaceManager(base_dir=workspace_dir)
+        try:
+            workspace = workspace_manager.get_workspace(project_name)
+        except FileNotFoundError:
+            console.print(f"[red]Error:[/red] Project '{project_name}' not found")
+            console.print(f"[dim]Workspace directory: {workspace_dir}[/dim]")
+            sys.exit(1)
+
+        # Check for publish record
+        publish_record_path = workspace / "publish_record.json"
+        if not publish_record_path.exists():
+            # Check if there's an archived record
+            archived_path = workspace / "publish_record_deleted.json"
+            if archived_path.exists():
+                console.print(
+                    Panel.fit(
+                        "[yellow]Thread was already deleted.[/yellow]\n\n"
+                        f"See {archived_path} for deletion history.",
+                        border_style="yellow",
+                    )
+                )
+            else:
+                console.print(
+                    Panel.fit(
+                        "[yellow]No publish record found.[/yellow]\n\n"
+                        "This thread may not have been published yet,\n"
+                        "or the publish record was manually removed.",
+                        border_style="yellow",
+                    )
+                )
+            sys.exit(1)
+
+        # Load publish record
+        import json
+        with open(publish_record_path) as f:
+            record = json.load(f)
+
+        # Initialize Twitter publisher
+        publisher = TwitterPublisher(
+            api_key=config.twitter_api_key,
+            api_secret=config.twitter_api_secret,
+            access_token=config.twitter_access_token,
+            access_token_secret=config.twitter_access_token_secret,
+            bearer_token=config.twitter_bearer_token if config.twitter_bearer_token else None,
+        )
+
+        # Verify credentials
+        try:
+            user_info = publisher.verify_credentials()
+            console.print(
+                f"[green]✓[/green] Authenticated as: @{user_info['username']}"
+            )
+        except Exception as e:
+            console.print(f"[red]Error:[/red] Failed to verify Twitter credentials: {e}")
+            sys.exit(1)
+
+        # Show what will be deleted
+        console.print()
+        console.print(
+            Panel.fit(
+                f"[bold red]Delete Thread[/bold red]\n\n"
+                f"Project: [yellow]{project_name}[/yellow]\n"
+                f"Published at: {record.get('published_at', 'Unknown')}\n"
+                f"Tweet count: [bold]{record.get('tweet_count', len(record['tweets']))}[/bold]\n"
+                f"First tweet: {record.get('first_tweet_url', 'Unknown')}",
+                border_style="red",
+            )
+        )
+
+        console.print()
+        console.print("[bold]Tweets to delete:[/bold]")
+        for tweet in record["tweets"]:
+            console.print(f"  {tweet['position']}. {tweet['url']}")
+            console.print(f"     [dim]{tweet['text'][:60]}...[/dim]")
+
+        if not yes:
+            console.print()
+            console.print("[bold red]This action cannot be undone![/bold red]")
+            if not click.confirm("Delete all these tweets?", default=False):
+                console.print("[yellow]Cancelled.[/yellow]")
+                return
+
+        # Delete thread
+        console.print()
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task(
+                "[red]Deleting tweets...",
+                total=len(record["tweets"]),
+            )
+
+            results = publisher.delete_thread(workspace, delay_seconds=delay)
+
+            progress.update(task, completed=results["total"])
+
+        # Show results
+        console.print()
+        if results["failed"] > 0:
+            console.print(
+                Panel.fit(
+                    f"[yellow]Deletion completed with errors[/yellow]\n\n"
+                    f"Deleted: {results['deleted']}\n"
+                    f"Already deleted: {results['already_deleted']}\n"
+                    f"Failed: {results['failed']}\n\n"
+                    f"Errors:\n" + "\n".join(
+                        f"  - {e['id']}: {e['error']}" for e in results["errors"]
+                    ),
+                    border_style="yellow",
+                    title="[bold yellow]Partial Deletion[/bold yellow]",
+                )
+            )
+        else:
+            console.print(
+                Panel.fit(
+                    f"[green]Thread deleted successfully![/green]\n\n"
+                    f"Deleted: {results['deleted']} tweets\n"
+                    f"Already deleted: {results['already_deleted']}",
+                    border_style="green",
+                    title="[bold green]Deletion Complete[/bold green]",
+                )
+            )
+
+    except Exception as e:
+        console.print()
+        console.print(
+            Panel.fit(
+                f"[red]Error:[/red] {str(e)}\n\n"
+                f"Failed to delete thread.",
+                border_style="red",
+                title="[bold red]Deletion Failed[/bold red]",
+            )
+        )
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+
+@main.command()
+@click.argument("project_name")
+@click.option(
+    "--workspace-dir",
+    type=click.Path(path_type=Path),
+    default="projects",
+    help="Base directory for project workspaces",
+)
+def publish_status(project_name: str, workspace_dir: Path):
+    """Check the publish status of a project.
+
+    PROJECT_NAME: Name of the project to check
+    """
+    try:
+        # Get workspace
+        workspace_manager = WorkspaceManager(base_dir=workspace_dir)
+        try:
+            workspace = workspace_manager.get_workspace(project_name)
+        except FileNotFoundError:
+            console.print(f"[red]Error:[/red] Project '{project_name}' not found")
+            sys.exit(1)
+
+        # Check for publish record
+        publish_record_path = workspace / "publish_record.json"
+        deleted_record_path = workspace / "publish_record_deleted.json"
+
+        if publish_record_path.exists():
+            import json
+            with open(publish_record_path) as f:
+                record = json.load(f)
+
+            console.print(
+                Panel.fit(
+                    f"[green]Published[/green]\n\n"
+                    f"Published at: {record.get('published_at', 'Unknown')}\n"
+                    f"Username: @{record.get('username', 'Unknown')}\n"
+                    f"Tweet count: {record.get('tweet_count', len(record['tweets']))}\n\n"
+                    f"First tweet:\n{record.get('first_tweet_url', 'Unknown')}",
+                    border_style="green",
+                    title=f"[bold green]{project_name}[/bold green]",
+                )
+            )
+
+            console.print("\n[bold]All tweets:[/bold]")
+            for tweet in record["tweets"]:
+                console.print(f"  {tweet['position']}. {tweet['url']}")
+
+        elif deleted_record_path.exists():
+            import json
+            with open(deleted_record_path) as f:
+                record = json.load(f)
+
+            console.print(
+                Panel.fit(
+                    f"[yellow]Deleted[/yellow]\n\n"
+                    f"Originally published: {record.get('published_at', 'Unknown')}\n"
+                    f"Deleted at: {record.get('deleted_at', 'Unknown')}\n"
+                    f"Tweet count: {record.get('tweet_count', 'Unknown')}",
+                    border_style="yellow",
+                    title=f"[bold yellow]{project_name}[/bold yellow]",
+                )
+            )
+
+        else:
+            console.print(
+                Panel.fit(
+                    f"[dim]Not Published[/dim]\n\n"
+                    f"This thread has not been posted to Twitter yet.\n\n"
+                    f"Use 'vibesignal post-thread {project_name}' to publish.",
+                    border_style="dim",
+                    title=f"[bold]{project_name}[/bold]",
+                )
+            )
+
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+
+@main.command()
+@click.option(
+    "--style",
+    "-s",
+    type=click.Choice(["chalkboard", "modern", "minimal", "inaugural"]),
+    default="chalkboard",
+    help="Visual style for the quote card",
+)
+@click.option(
+    "--author",
+    "-a",
+    type=str,
+    default=None,
+    help="Filter quotes by author (e.g., 'Feynman', 'Einstein')",
+)
+@click.option(
+    "--theme",
+    "-t",
+    type=str,
+    default=None,
+    help="Filter quotes by theme (e.g., 'First Principles', 'Curiosity')",
+)
+@click.option(
+    "--daily",
+    is_flag=True,
+    help="Get today's daily quote (deterministic per day)",
+)
+@click.option(
+    "--inaugural",
+    is_flag=True,
+    help="Generate special inaugural post",
+)
+@click.option(
+    "--post",
+    is_flag=True,
+    help="Post the inspiration to Twitter",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Simulate posting without actually tweeting",
+)
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Custom output path for the image",
+)
+@click.option(
+    "--list-authors",
+    is_flag=True,
+    help="List all available authors",
+)
+@click.option(
+    "--list-themes",
+    is_flag=True,
+    help="List all available themes",
+)
+def inspire(
+    style: str,
+    author: Optional[str],
+    theme: Optional[str],
+    daily: bool,
+    inaugural: bool,
+    post: bool,
+    dry_run: bool,
+    output: Optional[Path],
+    list_authors: bool,
+    list_themes: bool,
+):
+    """Generate and post daily inspirational quotes from scientific icons.
+
+    Creates beautiful visual cards with quotes from Feynman, Einstein,
+    Curie, Turing, and other scientific legends.
+
+    Examples:
+
+        vibesignal inspire                    # Random quote
+        vibesignal inspire --daily            # Today's quote
+        vibesignal inspire --author Feynman   # Quote from Feynman
+        vibesignal inspire --inaugural --post # Post inaugural tweet
+    """
+    try:
+        db = QuoteDatabase()
+
+        # Handle list options
+        if list_authors:
+            console.print("[bold cyan]Available Authors:[/bold cyan]")
+            for auth in db.authors:
+                count = len(db.get_by_author(auth))
+                console.print(f"  - {auth} ({count} quotes)")
+            return
+
+        if list_themes:
+            console.print("[bold cyan]Available Themes:[/bold cyan]")
+            for th in db.themes:
+                count = len(db.get_by_theme(th))
+                console.print(f"  - {th} ({count} quotes)")
+            return
+
+        # Select quote
+        if inaugural:
+            quote = db.get_inaugural()
+            style = "inaugural"
+        elif daily:
+            quote = db.get_daily()
+        elif author:
+            quotes = db.get_by_author(author)
+            if not quotes:
+                console.print(f"[red]No quotes found for author: {author}[/red]")
+                console.print("[dim]Use --list-authors to see available authors[/dim]")
+                sys.exit(1)
+            import random
+            quote = random.choice(quotes)
+        elif theme:
+            quotes = db.get_by_theme(theme)
+            if not quotes:
+                console.print(f"[red]No quotes found for theme: {theme}[/red]")
+                console.print("[dim]Use --list-themes to see available themes[/dim]")
+                sys.exit(1)
+            import random
+            quote = random.choice(quotes)
+        else:
+            quote = db.get_random()
+
+        # Display quote
+        console.print()
+        console.print(
+            Panel.fit(
+                f'[italic]"{quote.text}"[/italic]\n\n'
+                f"[bold]{quote.author}[/bold]\n"
+                f"[dim]{quote.field} | {quote.theme}[/dim]"
+                + (f"\n[dim italic]({quote.context})[/dim italic]" if quote.context else ""),
+                border_style="cyan",
+                title="[bold cyan]Inspiration[/bold cyan]" if not inaugural else "[bold yellow]Inaugural Post[/bold yellow]",
+            )
+        )
+
+        # Generate image
+        console.print()
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("[cyan]Generating visual...", total=1)
+
+            visualizer = QuoteVisualizer(output_dir=Path("images"))
+            if inaugural:
+                image_path = visualizer.generate_inaugural(quote=quote, output_path=output)
+            else:
+                image_path = visualizer.generate(
+                    quote=quote,
+                    style=style,
+                    output_path=output,
+                )
+
+            progress.update(task, completed=1)
+
+        console.print(f"[green]Image saved:[/green] {image_path}")
+
+        # Post to Twitter if requested
+        if post or dry_run:
+            # Compose tweet text
+            if inaugural:
+                tweet_text = (
+                    f'"{quote.text}"\n\n'
+                    f"- {quote.author}\n\n"
+                    "Introducing VibeSignal: where first principles thinking meets clear communication.\n\n"
+                    "Deep insights. Good vibes. Coming soon."
+                )
+            else:
+                tweet_text = (
+                    f'"{quote.text}"\n\n'
+                    f"- {quote.author} ({quote.field})\n\n"
+                    f"#{quote.theme.replace(' ', '')} #FirstPrinciples"
+                )
+
+            console.print()
+            console.print("[bold]Tweet text:[/bold]")
+            console.print(Panel(tweet_text, border_style="dim"))
+            console.print(f"[dim]Characters: {len(tweet_text)}/280[/dim]")
+
+            if len(tweet_text) > 280:
+                console.print("[yellow]Warning: Tweet exceeds 280 characters, truncating...[/yellow]")
+                tweet_text = tweet_text[:277] + "..."
+
+            # Load config and post
+            try:
+                config = get_config()
+            except Exception as e:
+                console.print(f"[red]Error loading config:[/red] {e}")
+                sys.exit(1)
+
+            if not dry_run and not all([
+                config.twitter_api_key,
+                config.twitter_api_secret,
+                config.twitter_access_token,
+                config.twitter_access_token_secret,
+            ]):
+                console.print("[red]Twitter credentials not configured[/red]")
+                sys.exit(1)
+
+            publisher = TwitterPublisher(
+                api_key=config.twitter_api_key or "",
+                api_secret=config.twitter_api_secret or "",
+                access_token=config.twitter_access_token or "",
+                access_token_secret=config.twitter_access_token_secret or "",
+                bearer_token=config.twitter_bearer_token if config.twitter_bearer_token else None,
+            )
+
+            if not dry_run:
+                user_info = publisher.verify_credentials()
+                console.print(f"[green]Authenticated as:[/green] @{user_info['username']}")
+
+                if not click.confirm("\nPost this inspiration to Twitter?", default=False):
+                    console.print("[yellow]Cancelled.[/yellow]")
+                    return
+
+                # Upload image and post
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    console=console,
+                ) as progress:
+                    task = progress.add_task("[cyan]Posting to Twitter...", total=2)
+
+                    # Upload image
+                    media = publisher.api_v1.media_upload(filename=str(image_path))
+                    progress.advance(task)
+
+                    # Post tweet
+                    response = publisher.client.create_tweet(
+                        text=tweet_text,
+                        media_ids=[media.media_id_string],
+                    )
+                    progress.advance(task)
+
+                tweet_url = f"https://twitter.com/{user_info['username']}/status/{response.data['id']}"
+                console.print()
+                console.print(
+                    Panel.fit(
+                        f"[green]Posted successfully![/green]\n\n"
+                        f"[link={tweet_url}]{tweet_url}[/link]",
+                        border_style="green",
+                        title="[bold green]Inspiration Posted[/bold green]",
+                    )
+                )
+            else:
+                console.print()
+                console.print(
+                    Panel.fit(
+                        "[yellow]DRY RUN[/yellow]\n\n"
+                        f"Would post tweet with image:\n{image_path}",
+                        border_style="yellow",
+                    )
+                )
+
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)

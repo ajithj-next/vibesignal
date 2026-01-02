@@ -99,7 +99,7 @@ class ClaudeClient:
         # Count images
         num_images = len(notebook.images)
 
-        prompt = f"""You are analyzing a Jupyter notebook that contains first principles reasoning and technical insights. Your task is to extract the key insights and structure them for a Twitter/X thread.
+        prompt = f"""You are a viral tech content creator analyzing a Jupyter notebook with first principles reasoning. Your task is to create an engaging Twitter/X thread that connects deeply with the audience.
 
 NOTEBOOK CONTENT:
 {notebook_content}
@@ -110,16 +110,32 @@ TASK:
 1. Identify the core first principles being explored in this notebook
 2. Extract 5-10 key insights that would resonate on Twitter (technical audience)
 3. Structure these insights into a thread with a maximum of {max_tweets} tweets
-4. For each insight, suggest engaging, concise tweet text (max 275 characters including position numbering)
+4. For each insight, create engaging, conversational tweet text (max 275 characters including position numbering)
 5. Suggest which images (by index 0-{num_images-1}) would best illustrate each tweet
-6. Create an engaging hook for the opening tweet
+6. Create a hook that stops the scroll and makes readers want more
 
-REQUIREMENTS:
-- Tweet text should be clear, engaging, and technically accurate
-- Each tweet should stand alone but flow naturally in the thread
-- Use simple language to explain complex concepts
-- Include the "why" not just the "what"
-- Make it visually engaging - suggest images where relevant
+CRITICAL REQUIREMENTS FOR AUDIENCE ENGAGEMENT:
+- Write like you're explaining to a smart friend over coffee, not lecturing
+- Start with "Here's the thing..." or "Most people miss this..." to draw readers in
+- Use rhetorical questions to spark curiosity: "Ever wondered why...?"
+- Create tension and resolution: present a problem, then reveal the elegant solution
+- Use specific numbers and concrete examples - vague claims don't engage
+- End tweets with cliffhangers that make readers want the next tweet
+- Use contrasts: "The old way vs. the breakthrough way"
+- Make the reader feel smarter for reading your thread
+
+CHARACTER FORMATTING RULES (VERY IMPORTANT):
+- Use ONLY standard ASCII characters - no fancy Unicode quotes or apostrophes
+- Use straight quotes (") and straight apostrophes (') only
+- Avoid special symbols like →, ⟹, ≈ etc. Use words or simple arrows (->) instead
+- Keep emojis minimal and purposeful (1-2 per tweet maximum)
+- Use line breaks strategically for readability
+
+ENGAGEMENT TECHNIQUES:
+- Hook: Make a bold claim or ask a provocative question
+- Body tweets: Each should have a mini-hook that maintains momentum
+- Closer: End with a powerful takeaway or call to think differently
+- Include the "why" not just the "what" - connect concepts to real impact
 
 OUTPUT FORMAT (return as valid JSON):
 {{
