@@ -59,6 +59,28 @@ class VibeSignalConfig(BaseSettings):
         description="Directory for extracted images",
     )
 
+    # Twitter/X Configuration (Optional)
+    twitter_api_key: str = Field(
+        default="",
+        description="Twitter API key",
+    )
+    twitter_api_secret: str = Field(
+        default="",
+        description="Twitter API secret",
+    )
+    twitter_access_token: str = Field(
+        default="",
+        description="Twitter access token",
+    )
+    twitter_access_token_secret: str = Field(
+        default="",
+        description="Twitter access token secret",
+    )
+    twitter_bearer_token: str = Field(
+        default="",
+        description="Twitter bearer token",
+    )
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_prefix="VIBESIGNAL_",

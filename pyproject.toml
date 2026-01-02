@@ -41,6 +41,9 @@ dependencies = [
 
     # Utilities
     "pathvalidate>=3.2.0",
+
+    # Twitter API
+    "tweepy>=4.14.0",
 ]
 
 [project.optional-dependencies]
