@@ -1242,5 +1242,216 @@ def inspire(
         sys.exit(1)
 
 
+@main.command()
+@click.argument("latex", required=False)
+@click.option(
+    "--title",
+    "-t",
+    type=str,
+    default=None,
+    help="Title for the equation card",
+)
+@click.option(
+    "--description",
+    "-d",
+    type=str,
+    default=None,
+    help="Description text below the equation",
+)
+@click.option(
+    "--style",
+    "-s",
+    type=click.Choice(["dark", "light", "vibesignal"]),
+    default="vibesignal",
+    help="Visual style for the card",
+)
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Custom output path for the image",
+)
+@click.option(
+    "--preset",
+    "-p",
+    type=str,
+    default=None,
+    help="Use a preset equation (euler, fourier, bayes, gradient_descent, etc.)",
+)
+@click.option(
+    "--list-presets",
+    is_flag=True,
+    help="List all available equation presets",
+)
+@click.option(
+    "--post",
+    is_flag=True,
+    help="Post the equation card to Twitter",
+)
+def equation(
+    latex: Optional[str],
+    title: Optional[str],
+    description: Optional[str],
+    style: str,
+    output: Optional[Path],
+    preset: Optional[str],
+    list_presets: bool,
+    post: bool,
+):
+    """Generate beautiful equation cards from LaTeX.
+
+    Creates hand-crafted visual cards with mathematical equations,
+    perfect for sharing on Twitter.
+
+    Examples:
+
+        vibesignal equation "E = mc^2" -t "Mass-Energy Equivalence"
+
+        vibesignal equation --preset euler
+
+        vibesignal equation "\\sum_{n=1}^{\\infty} \\frac{1}{n^2}" -t "Basel Problem"
+
+        vibesignal equation --list-presets
+    """
+    from vibesignal.rendering import MathRenderer, EquationStyle
+
+    try:
+        # Handle presets listing
+        from vibesignal.rendering.math_renderer import COMMON_EQUATIONS
+
+        if list_presets:
+            console.print("[bold cyan]Available Equation Presets:[/bold cyan]\n")
+            for name, eq in COMMON_EQUATIONS.items():
+                display_name = name.replace('_', ' ').title()
+                console.print(f"  [green]{name}[/green]")
+                console.print(f"    {display_name}: ${eq}$\n")
+            return
+
+        # Get equation from preset or argument
+        if preset:
+            if preset not in COMMON_EQUATIONS:
+                console.print(f"[red]Unknown preset: {preset}[/red]")
+                console.print("[dim]Use --list-presets to see available presets[/dim]")
+                sys.exit(1)
+            latex_eq = COMMON_EQUATIONS[preset]
+            if not title:
+                title = preset.replace('_', ' ').title()
+        elif latex:
+            latex_eq = latex
+        else:
+            console.print("[red]Error: Please provide a LaTeX equation or use --preset[/red]")
+            console.print("\nExamples:")
+            console.print('  vibesignal equation "E = mc^2" -t "Einstein\'s Equation"')
+            console.print("  vibesignal equation --preset euler")
+            sys.exit(1)
+
+        # Set default title if not provided
+        if not title:
+            title = "Mathematical Equation"
+
+        # Map style string to enum
+        style_map = {
+            "dark": EquationStyle.DARK,
+            "light": EquationStyle.LIGHT,
+            "vibesignal": EquationStyle.VIBESIGNAL,
+        }
+        eq_style = style_map[style]
+
+        # Set output path
+        if output is None:
+            output_dir = Path("images/equations")
+        else:
+            output_dir = output.parent
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Initialize renderer
+        renderer = MathRenderer(output_dir=output_dir, style=eq_style)
+
+        # Generate the card
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            progress.add_task("[cyan]Rendering equation card...", total=None)
+
+            if output:
+                image_path = renderer.render_equation_card(
+                    latex_eq,
+                    title=title,
+                    description=description,
+                    filename=output.name,
+                )
+            else:
+                image_path = renderer.render_equation_card(
+                    latex_eq,
+                    title=title,
+                    description=description,
+                )
+
+        console.print()
+        console.print(
+            Panel.fit(
+                f"[bold]{title}[/bold]\n\n"
+                f"[cyan]${latex_eq}$[/cyan]\n\n"
+                f"[green]Image saved to:[/green] {image_path}",
+                border_style="cyan",
+                title="[bold cyan]Equation Card Generated[/bold cyan]",
+            )
+        )
+
+        # Post to Twitter if requested
+        if post:
+            config = get_config()
+            publisher = TwitterPublisher(
+                api_key=config.twitter_api_key,
+                api_secret=config.twitter_api_secret,
+                access_token=config.twitter_access_token,
+                access_token_secret=config.twitter_access_token_secret,
+            )
+
+            # Verify credentials
+            user_info = publisher.verify_credentials()
+            console.print(f"\n[dim]Posting as @{user_info['username']}...[/dim]")
+
+            # Create tweet text
+            tweet_text = f"{title}\n\n#Math #VibeSignal"
+            if description:
+                tweet_text = f"{title}\n\n{description}\n\n#Math #VibeSignal"
+
+            # Post
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+            ) as progress:
+                progress.add_task("[cyan]Posting to Twitter...", total=None)
+
+                media = publisher.api_v1.media_upload(filename=str(image_path))
+                response = publisher.client.create_tweet(
+                    text=tweet_text,
+                    media_ids=[media.media_id_string],
+                )
+
+            tweet_url = f"https://twitter.com/{user_info['username']}/status/{response.data['id']}"
+            console.print()
+            console.print(
+                Panel.fit(
+                    f"[green]Posted successfully![/green]\n\n"
+                    f"[link={tweet_url}]{tweet_url}[/link]",
+                    border_style="green",
+                    title="[bold green]Equation Posted[/bold green]",
+                )
+            )
+
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     main()
