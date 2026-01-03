@@ -7,7 +7,8 @@ import pytest
 
 from vibesignal import NotebookParseError
 from vibesignal.parsing.notebook import NotebookParser
-from vibesignal.parsing.extractors import ImageExtractor
+from vibesignal.parsing.extractors import ImageExtractor, EquationExtractor
+from vibesignal.rendering import EquationStyle
 
 
 class TestNotebookParser:
@@ -115,3 +116,188 @@ class TestImageExtractor:
 
             extractor.extract_images(notebook, output_dir)
             assert output_dir.exists()
+
+
+class TestEquationExtractor:
+    """Tests for EquationExtractor class."""
+
+    def test_extract_equations_from_notebook(self):
+        """Test extracting equations from a notebook with LaTeX."""
+        parser = NotebookParser()
+        extractor = EquationExtractor()
+
+        notebook_path = Path(__file__).parent.parent / "fixtures" / "notebook_with_equations.ipynb"
+        parsed = parser.parse(notebook_path)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            equations = extractor.extract_equations(parsed, tmpdir)
+
+            # Notebook has 3 display equations ($$...$$)
+            assert len(equations) >= 3
+
+            # Check equation image properties
+            for eq in equations:
+                assert eq.format == "png"
+                assert eq.filename.startswith("eq_")
+                assert len(eq.data) > 0
+                assert eq.caption is not None
+
+                # Check image was saved
+                saved_path = Path(tmpdir) / eq.filename
+                assert saved_path.exists()
+
+    def test_extract_equations_creates_output_dir(self):
+        """Test that extract_equations creates the output directory."""
+        extractor = EquationExtractor()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "new_dir" / "equations"
+            assert not output_dir.exists()
+
+            # Create a minimal parsed notebook
+            from vibesignal.models import ParsedNotebook
+
+            notebook = ParsedNotebook(
+                filepath=Path("test.ipynb"),
+                cells=[],
+                images=[],
+            )
+
+            extractor.extract_equations(notebook, output_dir)
+            assert output_dir.exists()
+
+    def test_extract_equations_skips_short_equations(self):
+        """Test that very short equations are skipped."""
+        extractor = EquationExtractor(min_equation_length=5)
+
+        from vibesignal.models import ParsedNotebook, NotebookCell
+
+        notebook = ParsedNotebook(
+            filepath=Path("test.ipynb"),
+            cells=[
+                NotebookCell(
+                    cell_type="markdown",
+                    source="Here is $x$ and also $x + y + z = 10$",
+                    outputs=[],
+                )
+            ],
+            images=[],
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            equations = extractor.extract_equations(notebook, tmpdir)
+
+            # Only the longer equation should be extracted
+            assert len(equations) == 1
+
+    def test_extract_equations_handles_display_equations(self):
+        """Test extraction of display equations ($$...$$)."""
+        extractor = EquationExtractor()
+
+        from vibesignal.models import ParsedNotebook, NotebookCell
+
+        notebook = ParsedNotebook(
+            filepath=Path("test.ipynb"),
+            cells=[
+                NotebookCell(
+                    cell_type="markdown",
+                    source="The famous equation:\n\n$$E = mc^2$$\n\nIs well known.",
+                    outputs=[],
+                )
+            ],
+            images=[],
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            equations = extractor.extract_equations(notebook, tmpdir)
+
+            assert len(equations) == 1
+            assert "E = mc^2" in equations[0].caption
+
+    def test_extract_equations_ignores_code_cells(self):
+        """Test that code cells are ignored."""
+        extractor = EquationExtractor()
+
+        from vibesignal.models import ParsedNotebook, NotebookCell
+
+        notebook = ParsedNotebook(
+            filepath=Path("test.ipynb"),
+            cells=[
+                NotebookCell(
+                    cell_type="code",
+                    source="# This has $\\alpha$ in a comment",
+                    outputs=[],
+                ),
+                NotebookCell(
+                    cell_type="markdown",
+                    source="Real equation: $\\beta + \\gamma$",
+                    outputs=[],
+                )
+            ],
+            images=[],
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            equations = extractor.extract_equations(notebook, tmpdir)
+
+            # Only the markdown cell equation should be extracted
+            assert len(equations) == 1
+
+    def test_get_equation_count(self):
+        """Test counting equations without rendering."""
+        extractor = EquationExtractor()
+
+        from vibesignal.models import ParsedNotebook, NotebookCell
+
+        notebook = ParsedNotebook(
+            filepath=Path("test.ipynb"),
+            cells=[
+                NotebookCell(
+                    cell_type="markdown",
+                    source="Equations: $\\alpha$, $\\beta$, $$\\gamma + \\delta$$",
+                    outputs=[],
+                )
+            ],
+            images=[],
+        )
+
+        count = extractor.get_equation_count(notebook)
+        assert count == 3
+
+    def test_generate_title_recognizes_common_equations(self):
+        """Test that common equation patterns get meaningful titles."""
+        extractor = EquationExtractor()
+
+        # Test various equation patterns
+        assert extractor._generate_title("e^{i\\pi} + 1 = 0", "display") == "Euler's Formula"
+        assert extractor._generate_title("\\int_0^1 f(x) dx", "display") == "Integral"
+        assert extractor._generate_title("\\sum_{n=1}^N x_n", "display") == "Summation"
+        assert extractor._generate_title("\\nabla f", "inline") == "Gradient"
+        assert extractor._generate_title("\\frac{df}{dx}", "inline") == "Derivative"
+        assert extractor._generate_title("x + y = z", "inline") == "Equation"
+
+    def test_equation_extractor_with_custom_style(self):
+        """Test equation extractor with custom style."""
+        extractor = EquationExtractor(style=EquationStyle.DARK)
+
+        from vibesignal.models import ParsedNotebook, NotebookCell
+
+        notebook = ParsedNotebook(
+            filepath=Path("test.ipynb"),
+            cells=[
+                NotebookCell(
+                    cell_type="markdown",
+                    source="$$\\alpha + \\beta = \\gamma$$",
+                    outputs=[],
+                )
+            ],
+            images=[],
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            equations = extractor.extract_equations(notebook, tmpdir)
+
+            assert len(equations) == 1
+            # Image should be created
+            saved_path = Path(tmpdir) / equations[0].filename
+            assert saved_path.exists()

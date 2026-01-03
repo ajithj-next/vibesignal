@@ -1,4 +1,4 @@
-"""Image extraction from notebook outputs."""
+"""Image and equation extraction from notebook outputs."""
 
 import base64
 import hashlib
@@ -10,6 +10,7 @@ import io
 
 from vibesignal import NotebookParseError
 from vibesignal.models import ImageOutput, ParsedNotebook
+from vibesignal.rendering import MathRenderer, EquationStyle
 
 
 class ImageExtractor:
@@ -171,3 +172,158 @@ class ImageExtractor:
         # For MVP, we'll skip caption extraction
         # This can be enhanced later by looking at surrounding markdown cells
         return None
+
+
+class EquationExtractor:
+    """Extract and render equations from notebook markdown cells.
+
+    Finds LaTeX equations in markdown cells ($...$, $$...$$) and renders
+    them as beautiful equation cards using MathRenderer.
+    """
+
+    def __init__(
+        self,
+        style: EquationStyle = EquationStyle.VIBESIGNAL,
+        min_equation_length: int = 3,
+    ):
+        """Initialize equation extractor.
+
+        Args:
+            style: Visual style for rendered equation cards
+            min_equation_length: Minimum LaTeX length to consider as equation
+        """
+        self.style = style
+        self.min_equation_length = min_equation_length
+
+    def extract_equations(
+        self, notebook: ParsedNotebook, output_dir: Path | str
+    ) -> list[ImageOutput]:
+        """Extract and render all equations from notebook markdown cells.
+
+        Args:
+            notebook: Parsed notebook to extract equations from
+            output_dir: Directory to save rendered equation images
+
+        Returns:
+            list[ImageOutput]: List of rendered equation images with metadata
+        """
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Initialize renderer
+        renderer = MathRenderer(output_dir=output_dir, style=self.style)
+
+        images: list[ImageOutput] = []
+        equation_count = 0
+
+        for cell_index, cell in enumerate(notebook.cells):
+            # Only process markdown cells
+            if cell.cell_type != "markdown":
+                continue
+
+            # Extract equations from cell source
+            equations = renderer.extract_equations(cell.source)
+
+            for eq in equations:
+                # Skip very short equations (likely not meaningful)
+                if len(eq['latex']) < self.min_equation_length:
+                    continue
+
+                # Generate a descriptive title based on equation type
+                title = self._generate_title(eq['latex'], eq['type'])
+
+                try:
+                    # Render equation as a card
+                    image_path = renderer.render_equation_card(
+                        latex=eq['latex'],
+                        title=title,
+                        filename=f"eq_{cell_index}_{equation_count}.png",
+                    )
+
+                    # Read the rendered image data
+                    with open(image_path, 'rb') as f:
+                        image_data = f.read()
+
+                    # Create ImageOutput
+                    image = ImageOutput(
+                        cell_index=cell_index,
+                        output_index=equation_count,  # Use equation index as output_index
+                        format="png",
+                        data=image_data,
+                        filename=image_path.name,
+                        caption=f"Equation: {eq['latex'][:50]}{'...' if len(eq['latex']) > 50 else ''}",
+                    )
+                    images.append(image)
+                    equation_count += 1
+
+                except Exception as e:
+                    # Log but don't fail - just skip this equation
+                    print(f"Warning: Failed to render equation in cell {cell_index}: {e}")
+                    continue
+
+        return images
+
+    def _generate_title(self, latex: str, eq_type: str) -> str:
+        """Generate a descriptive title for an equation.
+
+        Args:
+            latex: The LaTeX equation string
+            eq_type: Type of equation ('display' or 'inline')
+
+        Returns:
+            str: A descriptive title for the equation card
+        """
+        # Check for common equation patterns and give them meaningful titles
+        latex_lower = latex.lower().replace(" ", "")
+
+        # Common equation patterns
+        if "e^{i" in latex_lower or "e^i" in latex_lower:
+            return "Euler's Formula"
+        elif "=mc^2" in latex_lower or "=mc²" in latex_lower:
+            return "Mass-Energy Equivalence"
+        elif "\\frac{d" in latex or "\\frac{\\partial" in latex:
+            return "Derivative"
+        elif "\\int" in latex:
+            return "Integral"
+        elif "\\sum" in latex:
+            return "Summation"
+        elif "\\prod" in latex:
+            return "Product"
+        elif "\\lim" in latex:
+            return "Limit"
+        elif "\\nabla" in latex:
+            return "Gradient"
+        elif "p(a|b)" in latex_lower or "p(b|a)" in latex_lower:
+            return "Bayes' Theorem"
+        elif "\\sigma" in latex and "e^" in latex:
+            return "Softmax Function"
+        elif "\\log" in latex or "\\ln" in latex:
+            return "Logarithmic Expression"
+        elif "\\sqrt" in latex:
+            return "Root Expression"
+        elif "\\matrix" in latex or "\\begin{bmatrix}" in latex:
+            return "Matrix Expression"
+        elif "=" in latex:
+            return "Equation"
+        else:
+            return "Mathematical Expression"
+
+    def get_equation_count(self, notebook: ParsedNotebook) -> int:
+        """Count the number of equations in a notebook without rendering.
+
+        Args:
+            notebook: Parsed notebook to count equations in
+
+        Returns:
+            int: Number of equations found
+        """
+        renderer = MathRenderer()  # Just for extraction, no rendering
+        count = 0
+
+        for cell in notebook.cells:
+            if cell.cell_type == "markdown":
+                equations = renderer.extract_equations(cell.source)
+                count += len([eq for eq in equations
+                             if len(eq['latex']) >= self.min_equation_length])
+
+        return count

@@ -9,6 +9,7 @@ import nbformat
 import pytest
 
 from vibesignal.workspace import WorkspaceManager
+from vibesignal.parsing.extractors import EquationExtractor
 
 
 @pytest.fixture
@@ -75,6 +76,56 @@ The least squares solution minimizes the sum of squared errors, which has a clos
 
 
 @pytest.fixture
+def notebook_with_equations(tmp_path):
+    """Create a notebook with LaTeX equations for testing."""
+    nb = nbformat.v4.new_notebook()
+
+    # Add markdown with display equations
+    nb.cells.append(
+        nbformat.v4.new_markdown_cell(
+            """# Gradient Descent Analysis
+
+The fundamental update rule is:
+
+$$\\theta_{t+1} = \\theta_t - \\alpha \\nabla_\\theta L(\\theta_t)$$
+
+Where $\\alpha$ is the learning rate."""
+        )
+    )
+
+    # Add code cell
+    nb.cells.append(nbformat.v4.new_code_cell("import numpy as np"))
+
+    # Add another markdown with equations
+    nb.cells.append(
+        nbformat.v4.new_markdown_cell(
+            """## Loss Function
+
+$$L(\\theta) = \\frac{1}{n} \\sum_{i=1}^{n} (y_i - f(x_i; \\theta))^2$$"""
+        )
+    )
+
+    # Add code cell with output
+    code_cell = nbformat.v4.new_code_cell("plt.plot([1,2,3])")
+    code_cell.outputs = [
+        nbformat.v4.new_output(
+            "display_data",
+            data={
+                "image/png": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+            },
+        )
+    ]
+    nb.cells.append(code_cell)
+
+    # Write notebook
+    notebook_path = tmp_path / "notebook_with_equations.ipynb"
+    with open(notebook_path, "w") as f:
+        nbformat.write(nb, f)
+
+    return notebook_path
+
+
+@pytest.fixture
 def mock_claude_response():
     """Mock Claude API response for testing."""
     return {
@@ -123,6 +174,27 @@ def mock_claude_response():
     }
 
 
+def create_mock_claude_message(response_data):
+    """Helper to create a properly mocked Claude message with usage data.
+
+    Args:
+        response_data: The JSON data to return as the response
+
+    Returns:
+        Mock: A properly configured mock message object
+    """
+    mock_message = Mock()
+    mock_message.content = [Mock(text=json.dumps(response_data))]
+    # Mock usage data for metrics tracking
+    mock_message.usage = Mock()
+    mock_message.usage.input_tokens = 1500
+    mock_message.usage.output_tokens = 800
+    mock_message.usage.cache_creation_input_tokens = 0
+    mock_message.usage.cache_read_input_tokens = 0
+    mock_message.id = "msg_test_integration"
+    return mock_message
+
+
 class TestFullPipeline:
     """Integration tests for the complete pipeline."""
 
@@ -140,8 +212,7 @@ class TestFullPipeline:
         # Setup mock Claude client
         mock_client = Mock()
         mock_anthropic.return_value = mock_client
-        mock_message = Mock()
-        mock_message.content = [Mock(text=json.dumps(mock_claude_response))]
+        mock_message = create_mock_claude_message(mock_claude_response)
         mock_client.messages.create.return_value = mock_message
 
         # Create workspace for outputs
@@ -262,8 +333,7 @@ class TestFullPipeline:
         # Setup mock
         mock_client = Mock()
         mock_anthropic.return_value = mock_client
-        mock_message = Mock()
-        mock_message.content = [Mock(text=json.dumps(mock_claude_response))]
+        mock_message = create_mock_claude_message(mock_claude_response)
         mock_client.messages.create.return_value = mock_message
 
         # Create workspace
@@ -322,3 +392,146 @@ class TestFullPipeline:
         assert "json" in summary["available_outputs"]
         assert "txt" in summary["available_outputs"]
         assert "md" in summary["available_outputs"]
+
+    @patch("vibesignal.analysis.claude_client.anthropic.Anthropic")
+    def test_pipeline_with_equations(
+        self, mock_anthropic, notebook_with_equations, tmp_path
+    ):
+        """Test the pipeline extracts and renders equations from notebooks."""
+        from vibesignal.analysis.claude_client import ClaudeClient
+        from vibesignal.generation.thread import ThreadGenerator
+        from vibesignal.parsing.extractors import ImageExtractor
+        from vibesignal.parsing.notebook import NotebookParser
+
+        # Setup mock Claude response that references equation images
+        mock_response = {
+            "first_principles": [
+                "Gradient descent minimizes loss iteratively",
+            ],
+            "insights": [
+                {
+                    "content": "The update rule is fundamental",
+                    "tweet_suggestion": "The gradient descent update rule is elegant!",
+                    "importance": "high",
+                },
+            ],
+            "thread_structure": [
+                {
+                    "position": 1,
+                    "content": "Let's explore gradient descent from first principles (1/3)",
+                    "image_index": None,
+                },
+                {
+                    "position": 2,
+                    "content": "The key equation: parameter update rule (2/3)",
+                    "image_index": 0,  # Code cell image
+                },
+                {
+                    "position": 3,
+                    "content": "Loss function drives the optimization (3/3)",
+                    "image_index": 1,  # First equation image
+                },
+            ],
+            "image_mappings": [
+                {"image_index": 0, "suggested_position": 2, "relevance": "Plot visualization"},
+                {"image_index": 1, "suggested_position": 3, "relevance": "Equation visualization"},
+            ],
+            "hook": "Want to understand how neural networks learn?",
+        }
+
+        mock_client = Mock()
+        mock_anthropic.return_value = mock_client
+        mock_message = create_mock_claude_message(mock_response)
+        mock_client.messages.create.return_value = mock_message
+
+        # Create workspace
+        workspace = tmp_path / "gradient_descent_project"
+        workspace.mkdir()
+        images_dir = workspace / "images"
+        images_dir.mkdir()
+
+        # Step 1: Parse notebook
+        parser = NotebookParser()
+        parsed_notebook = parser.parse(notebook_with_equations)
+
+        # Step 2: Extract images from code outputs
+        image_extractor = ImageExtractor()
+        images = image_extractor.extract_images(parsed_notebook, images_dir)
+
+        # Step 3: Extract and render equations
+        equation_extractor = EquationExtractor()
+        equation_images = equation_extractor.extract_equations(parsed_notebook, images_dir)
+
+        # Verify equations were extracted
+        assert len(equation_images) >= 2  # At least 2 display equations
+
+        # Verify equation images are saved
+        for eq_img in equation_images:
+            assert eq_img.filename.startswith("eq_")
+            assert (images_dir / eq_img.filename).exists()
+
+        # Combine images
+        all_images = images + equation_images
+
+        # Verify we have both code output images and equation images
+        code_images = [img for img in all_images if not img.filename.startswith("eq_")]
+        eq_images = [img for img in all_images if img.filename.startswith("eq_")]
+        assert len(code_images) >= 1
+        assert len(eq_images) >= 2
+
+        # Step 4: Generate thread
+        claude = ClaudeClient(api_key="test-key")
+        insights = claude.analyze_notebook(parsed_notebook)
+
+        generator = ThreadGenerator()
+        thread = generator.generate_thread(
+            insights=insights,
+            images=all_images,
+            source_notebook=str(notebook_with_equations),
+            claude_model="claude-sonnet-4-5-20250929",
+        )
+
+        # Verify thread includes images
+        assert thread.metadata.total_images >= 1
+        tweets_with_images = [t for t in thread.tweets if t.image_filename]
+        assert len(tweets_with_images) >= 1
+
+
+class TestEquationIntegration:
+    """Integration tests specifically for equation extraction."""
+
+    def test_equation_extraction_standalone(self, notebook_with_equations, tmp_path):
+        """Test equation extraction works independently."""
+        from vibesignal.parsing.notebook import NotebookParser
+
+        parser = NotebookParser()
+        parsed = parser.parse(notebook_with_equations)
+
+        extractor = EquationExtractor()
+        equations = extractor.extract_equations(parsed, tmp_path / "equations")
+
+        # Should have extracted the display equations
+        assert len(equations) >= 2
+
+        # Check the equations are properly labeled
+        filenames = [eq.filename for eq in equations]
+        assert all(f.startswith("eq_") for f in filenames)
+        assert all(f.endswith(".png") for f in filenames)
+
+    def test_equation_count_matches_extraction(self, notebook_with_equations, tmp_path):
+        """Test that get_equation_count matches actual extraction."""
+        from vibesignal.parsing.notebook import NotebookParser
+
+        parser = NotebookParser()
+        parsed = parser.parse(notebook_with_equations)
+
+        extractor = EquationExtractor()
+
+        # Count first
+        count = extractor.get_equation_count(parsed)
+
+        # Then extract
+        equations = extractor.extract_equations(parsed, tmp_path / "equations")
+
+        # Count should match (accounting for inline equations with $\alpha$)
+        assert count >= len(equations)

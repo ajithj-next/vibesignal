@@ -73,6 +73,13 @@ class TestClaudeClient:
 
         mock_message = Mock()
         mock_message.content = [Mock(text=json.dumps(sample_claude_response))]
+        # Mock usage data for metrics tracking
+        mock_message.usage = Mock()
+        mock_message.usage.input_tokens = 1000
+        mock_message.usage.output_tokens = 500
+        mock_message.usage.cache_creation_input_tokens = 0
+        mock_message.usage.cache_read_input_tokens = 0
+        mock_message.id = "msg_test_123"
         mock_client.messages.create.return_value = mock_message
 
         # Test
@@ -83,6 +90,12 @@ class TestClaudeClient:
         assert result["first_principles"] == sample_claude_response["first_principles"]
         assert result["hook"] == sample_claude_response["hook"]
         assert len(result["thread_structure"]) == 2
+
+        # Verify metrics were captured
+        metrics = client.get_last_call_metrics()
+        assert metrics is not None
+        assert metrics.usage.input_tokens == 1000
+        assert metrics.usage.output_tokens == 500
 
     @patch("vibesignal.analysis.claude_client.anthropic.Anthropic")
     def test_analyze_notebook_with_markdown_json(self, mock_anthropic, sample_notebook, sample_claude_response):
@@ -95,6 +108,13 @@ class TestClaudeClient:
         markdown_response = f"Here's the analysis:\n```json\n{json.dumps(sample_claude_response)}\n```"
         mock_message = Mock()
         mock_message.content = [Mock(text=markdown_response)]
+        # Mock usage data for metrics tracking
+        mock_message.usage = Mock()
+        mock_message.usage.input_tokens = 800
+        mock_message.usage.output_tokens = 400
+        mock_message.usage.cache_creation_input_tokens = 0
+        mock_message.usage.cache_read_input_tokens = 0
+        mock_message.id = None
         mock_client.messages.create.return_value = mock_message
 
         # Test

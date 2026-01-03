@@ -14,7 +14,7 @@ from vibesignal.analysis.claude_client import ClaudeClient
 from vibesignal.config import get_config
 from vibesignal.generation.thread import ThreadGenerator
 from vibesignal.output.writer import OutputWriter
-from vibesignal.parsing.extractors import ImageExtractor
+from vibesignal.parsing.extractors import ImageExtractor, EquationExtractor
 from vibesignal.parsing.notebook import NotebookParser
 from vibesignal.workspace import WorkspaceManager
 from vibesignal.publishing.twitter import TwitterPublisher
@@ -154,17 +154,27 @@ def convert(
             parsed_notebook = parser.parse(notebook)
             progress.advance(task)
 
-            # Extract images
+            # Extract images from code cell outputs
             progress.update(task, description="[cyan]Extracting images...")
             extractor = ImageExtractor()
             images = extractor.extract_images(parsed_notebook, images_dir)
-            console.print(f"  Extracted {len(images)} image(s)")
+            console.print(f"  Extracted {len(images)} image(s) from code outputs")
+
+            # Extract and render equations from markdown cells
+            progress.update(task, description="[cyan]Rendering equations...")
+            eq_extractor = EquationExtractor()
+            equation_images = eq_extractor.extract_equations(parsed_notebook, images_dir)
+            if equation_images:
+                console.print(f"  Rendered {len(equation_images)} equation card(s)")
+                images.extend(equation_images)
+
             progress.advance(task)
 
             # Analyze with Claude
             progress.update(task, description="[cyan]Analyzing with Claude AI...")
             claude = ClaudeClient(api_key=anthropic_api_key, model=claude_model)
             insights = claude.analyze_notebook(parsed_notebook, max_tweets=max_tweets_limit)
+            api_metrics = claude.get_last_call_metrics()
             progress.advance(task)
 
             # Generate thread
@@ -198,6 +208,8 @@ def convert(
             progress.advance(task)
 
         # Success message
+        code_images = len([img for img in images if not img.filename.startswith("eq_")])
+        eq_images = len([img for img in images if img.filename.startswith("eq_")])
         console.print()
         console.print(
             Panel.fit(
@@ -208,7 +220,7 @@ def convert(
                 f"  ├─ thread.json\n"
                 f"  ├─ thread.txt\n"
                 f"  ├─ thread.md\n"
-                f"  └─ images/ ({len(images)} files)",
+                f"  └─ images/ ({code_images} from code{f', {eq_images} equations' if eq_images else ''})",
                 border_style="green",
                 title=f"[bold green]{proj_name}[/bold green]",
             )
@@ -218,6 +230,44 @@ def convert(
         if thread.hook:
             console.print()
             console.print(Panel(thread.hook, title="[bold]Hook[/bold]", border_style="blue"))
+
+        # Show API cost breakdown
+        if api_metrics:
+            console.print()
+            cost_lines = [
+                f"[dim]Model:[/dim] {api_metrics.model}",
+                f"[dim]Wall Time:[/dim] {api_metrics.wall_time_seconds:.2f}s",
+                "",
+                "[bold]Token Usage:[/bold]",
+                f"  Input:        {api_metrics.usage.input_tokens:,}",
+                f"  Output:       {api_metrics.usage.output_tokens:,}",
+            ]
+            if api_metrics.usage.cache_creation_input_tokens > 0:
+                cost_lines.append(f"  Cache Write:  {api_metrics.usage.cache_creation_input_tokens:,}")
+            if api_metrics.usage.cache_read_input_tokens > 0:
+                cost_lines.append(f"  Cache Read:   {api_metrics.usage.cache_read_input_tokens:,}")
+            cost_lines.append(f"  [bold]Total:[/bold]        {api_metrics.usage.total_tokens:,}")
+
+            cost_lines.append("")
+            cost_lines.append("[bold]Cost Breakdown:[/bold]")
+            cost_lines.append(f"  Input:        ${api_metrics.cost.input_cost:.6f}")
+            cost_lines.append(f"  Output:       ${api_metrics.cost.output_cost:.6f}")
+            if api_metrics.cost.cache_write_cost > 0:
+                cost_lines.append(f"  Cache Write:  ${api_metrics.cost.cache_write_cost:.6f}")
+            if api_metrics.cost.cache_read_cost > 0:
+                cost_lines.append(f"  Cache Read:   ${api_metrics.cost.cache_read_cost:.6f}")
+            cost_lines.append(f"  [bold green]Total:[/bold green]        [bold]${api_metrics.cost.total_cost:.6f}[/bold]")
+
+            if api_metrics.cost.cache_savings > 0:
+                cost_lines.append(f"  [cyan]Cache Saved:[/cyan]  ${api_metrics.cost.cache_savings:.6f}")
+
+            console.print(
+                Panel(
+                    "\n".join(cost_lines),
+                    title="[bold cyan]Claude API Costs[/bold cyan]",
+                    border_style="cyan",
+                )
+            )
 
     except Exception as e:
         console.print()

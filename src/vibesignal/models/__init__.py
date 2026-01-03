@@ -2,6 +2,12 @@
 
 from vibesignal.models.notebook import ImageOutput, NotebookCell, ParsedNotebook
 from vibesignal.models.thread import Thread, ThreadMetadata, Tweet
+from vibesignal.models.cost import (
+    APICallMetrics,
+    CostBreakdown,
+    TokenUsage,
+    MODEL_PRICING,
+)
 
 __all__ = [
     "NotebookCell",
@@ -10,4 +16,8 @@ __all__ = [
     "Tweet",
     "ThreadMetadata",
     "Thread",
+    "APICallMetrics",
+    "CostBreakdown",
+    "TokenUsage",
+    "MODEL_PRICING",
 ]

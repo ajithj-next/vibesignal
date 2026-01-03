@@ -1,12 +1,13 @@
 """Claude API client for notebook analysis."""
 
 import json
-from typing import Any
+import time
+from typing import Any, Optional
 
 import anthropic
 
 from vibesignal import ClaudeAPIError
-from vibesignal.models import ParsedNotebook
+from vibesignal.models import ParsedNotebook, APICallMetrics
 
 
 class ClaudeClient:
@@ -32,6 +33,7 @@ class ClaudeClient:
         self.client = anthropic.Anthropic(api_key=api_key)
         self.model = model
         self.max_tokens = max_tokens
+        self.last_call_metrics: Optional[APICallMetrics] = None
 
     def analyze_notebook(
         self,
@@ -54,16 +56,29 @@ class ClaudeClient:
 
         Raises:
             ClaudeAPIError: If API call fails
+
+        Note:
+            After calling this method, access `self.last_call_metrics` for
+            detailed cost and usage information.
         """
         try:
             # Build the analysis prompt
             prompt = self._build_analysis_prompt(notebook, max_tweets)
 
-            # Call Claude API
+            # Call Claude API with timing
+            start_time = time.perf_counter()
             message = self.client.messages.create(
                 model=self.model,
                 max_tokens=self.max_tokens,
                 messages=[{"role": "user", "content": prompt}],
+            )
+            wall_time = time.perf_counter() - start_time
+
+            # Capture metrics
+            self.last_call_metrics = APICallMetrics.from_response(
+                response=message,
+                model=self.model,
+                wall_time_seconds=wall_time,
             )
 
             # Extract response text
@@ -82,6 +97,14 @@ class ClaudeClient:
             raise ClaudeAPIError(f"Claude API error: {e}") from e
         except Exception as e:
             raise ClaudeAPIError(f"Failed to analyze notebook: {e}") from e
+
+    def get_last_call_metrics(self) -> Optional[APICallMetrics]:
+        """Get metrics from the last API call.
+
+        Returns:
+            Optional[APICallMetrics]: Metrics from last call, or None if no calls made
+        """
+        return self.last_call_metrics
 
     def _build_analysis_prompt(self, notebook: ParsedNotebook, max_tweets: int) -> str:
         """Build the prompt for Claude to analyze the notebook.
